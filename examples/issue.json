@@ -1,0 +1,25 @@
+{
+  "state": {
+    "issue": "The API returns HTTP 500 after login."
+  },
+  "questions": {
+    "is_bug": {
+      "type": "noul",
+      "instructions": "Is this likely a software defect?"
+    },
+    "component": {
+      "type": "choice",
+      "instructions": "Which component most likely owns this problem?",
+      "criteria": {
+        "backend": "Server, API, database, authentication backend",
+        "frontend": "Browser UI or client-side application",
+        "infra": "Deployment, network, cloud, infrastructure"
+      }
+    },
+    "severity": {
+      "type": "score",
+      "instructions": "How severe is this issue?",
+      "criteria": ["Minor inconvenience", "Important feature impaired", "Service unusable"]
+    }
+  }
+}
