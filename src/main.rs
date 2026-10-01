@@ -49,7 +49,7 @@ async fn main() -> ExitCode {
             if error.body.code == "output_error" {
                 return ExitCode::from(4);
             }
-            let pretty = cli.pretty && !matches!(cli.command, jevc::cli::Command::Batch(_));
+            let pretty = cli.pretty && !cli.command.outputs_jsonl();
             if emit(&mut stdout, &error.response(), pretty).is_err() {
                 return ExitCode::from(4);
             }

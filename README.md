@@ -9,7 +9,7 @@ not a failed command.
 
 ## Installation
 
-Requires Rust 1.88 or later. Once published on crates.io, install with:
+Requires Rust 1.88 or later. Install the latest published version from crates.io:
 
 ```sh
 cargo install jevc --locked
@@ -53,6 +53,7 @@ jevc schema error
 jevc schema validation
 jevc schema batch-request
 jevc schema batch-response
+jevc schema batch-validation
 jevc version
 ```
 
@@ -158,6 +159,29 @@ Validation checks required fields, types, question kinds, criteria sizes, and
 unknown fields. User-named keys in diagnostic paths use JSON-quoted bracket
 notation, for example `$.questions["owner"].criteria`.
 
+Use `--batch` to validate JSONL locally before submitting it with `jevc batch`:
+
+```sh
+jevc validate --batch --file requests.jsonl
+```
+
+Each input line produces one compact JSON result, in input order, with its `id`
+echoed unchanged. Missing IDs become `null`. IDs are removed before validating
+the request, using the same input format as `batch`.
+
+```json
+{"ok":true,"valid":true,"id":"1"}
+{"ok":true,"valid":false,"errors":[{"path":"$.questions","code":"empty_questions","message":"questions must not be empty"}],"id":"2"}
+```
+
+No API key or network access is needed. Invalid requests return `valid:false`
+and do not affect the exit status, matching single-request validation. Malformed
+JSON, blank lines, and oversized records return `ok:false` with `id:null` and
+exit status `1`; later records are still validated. An empty stream exits `0`.
+Input/output I/O failures stop the stream. `--pretty` does not change JSONL
+formatting, including terminal error output. Use `schema batch-request` for the
+input schema and `schema batch-validation` for per-record results.
+
 ## Batch
 
 ```sh
@@ -184,7 +208,8 @@ as an ordinary error envelope without an ID when stdout remains writable.
 ## Streams, errors, and exit status
 
 Stdout contains compact JSON plus a newline, or JSONL for batch. `--pretty` enables
-indentation for single-value outputs. Only the explicit human-facing `--help`
+indentation for single-value outputs. `validate --batch` also emits JSONL.
+Only the explicit human-facing `--help`
 and `--version` options emit text. `jevc version` emits JSON.
 
 Input defaults to stdin. `--file PATH` is available on `decide`, `validate`, and
@@ -227,7 +252,7 @@ or billing guarantee.
 `--timeout` takes an integer number of seconds from 1 to 86400, defaults to 30,
 and covers each complete HTTP request including reading the response. Connection
 setup is limited to the smaller of that value and 10 seconds. HTTP redirects are
-not followed. Requests use `User-Agent: jevc/0.1.0`.
+not followed. Requests use `User-Agent: jevc/<application version>`.
 
 ## Security
 
@@ -274,6 +299,42 @@ Tests cover request validation, schema/runtime agreement, serialization, CLI
 subprocess behavior, and HTTP handling using loopback mock servers. They never
 call the real JEV service or require an API key. HTTP tests need permission to
 bind localhost ports. Endpoint injection is private to the client test module.
+
+GitHub Actions checks formatting, clippy, tests on stable and Rust 1.88, and
+`cargo publish --dry-run --locked` on branch pushes and pull requests.
+
+## Releasing
+
+Develop changes on a working branch and merge into `main` after CI passes.
+Version 0.1.0 was published manually. The next release is 0.2.0, adding local
+JSONL validation with `validate --batch`.
+
+Before the first automated release, configure Trusted Publishing in the
+[crates.io settings for jevc](https://crates.io/crates/jevc/settings):
+
+- Repository owner: `kirisaki`
+- Repository name: `jevc`
+- Workflow filename: `release.yml`
+- Environment: `release`
+
+Use the same `release` environment in GitHub repository settings. This workflow
+uses a temporary OIDC token; no crates.io API token secret is needed. See the
+[official Trusted Publishing documentation](https://crates.io/docs/trusted-publishing).
+
+For each release, update the version in `Cargo.toml` and the `jevc` entry in
+`Cargo.lock`, then merge those changes into `main`. Tag the release commit:
+
+```sh
+git switch main
+git pull --ff-only
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+The release workflow requires the tag to match the package version and its
+commit to be on `main`. It reruns the full CI checks before publishing to
+crates.io. Branch pushes run checks without publishing. Each subsequent release
+needs a new version and matching tag; published versions cannot be overwritten.
 
 ## License
 

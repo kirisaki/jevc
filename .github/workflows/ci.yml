@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: Format and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+      - run: cargo +stable fmt --check
+      - run: cargo +stable clippy --locked --all-targets --all-features -- -D warnings
+
+  test:
+    name: Test (Rust ${{ matrix.toolchain }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, '1.88.0']
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install Rust
+        env:
+          TOOLCHAIN: ${{ matrix.toolchain }}
+        run: rustup toolchain install "$TOOLCHAIN" --profile minimal
+      - name: Test
+        env:
+          TOOLCHAIN: ${{ matrix.toolchain }}
+        run: cargo +"$TOOLCHAIN" test --locked --all-targets --all-features
+
+  package:
+    name: Verify publishable package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - run: cargo +stable publish --dry-run --locked
