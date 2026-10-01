@@ -9,7 +9,14 @@ not a failed command.
 
 ## Installation
 
-Build with Rust stable (edition 2024):
+Requires Rust 1.88 or later. Once published on crates.io, install with:
+
+```sh
+cargo install jevc --locked
+jevc version
+```
+
+To build and install from source:
 
 ```sh
 git clone git@github.com:kirisaki/jevc.git
@@ -19,7 +26,6 @@ jevc version
 ```
 
 Alternatively, run `cargo build --locked` and use `./target/debug/jevc`.
-This project is not assumed to be published on crates.io.
 
 ## API key setup
 

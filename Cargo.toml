@@ -6,6 +6,8 @@ rust-version = "1.88"
 authors = ["Akihito Kirisaki <kirisaki@klara.works>"]
 description = "LLM-first CLI for JEV"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/kirisaki/jevc"
+readme = "README.md"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
