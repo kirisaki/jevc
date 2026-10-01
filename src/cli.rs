@@ -19,7 +19,7 @@ pub enum Command {
     /// Evaluate one JSON request using JEV.
     Decide(NetworkInput),
     /// Validate one JSON request locally, without configuration or network access.
-    Validate(Input),
+    Validate(ValidateInput),
     /// Print a JSON Schema for the CLI protocol.
     Schema {
         #[arg(value_enum)]
@@ -41,6 +41,24 @@ pub struct Input {
 }
 
 #[derive(Debug, Args)]
+pub struct ValidateInput {
+    #[command(flatten)]
+    pub input: Input,
+    /// Validate JSONL records locally, preserving IDs and continuing after errors.
+    #[arg(long)]
+    pub batch: bool,
+}
+
+impl Command {
+    pub fn outputs_jsonl(&self) -> bool {
+        matches!(
+            self,
+            Self::Batch(_) | Self::Validate(ValidateInput { batch: true, .. })
+        )
+    }
+}
+
+#[derive(Debug, Args)]
 pub struct NetworkInput {
     #[command(flatten)]
     pub input: Input,
@@ -57,4 +75,5 @@ pub enum SchemaTarget {
     Validation,
     BatchRequest,
     BatchResponse,
+    BatchValidation,
 }

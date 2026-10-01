@@ -74,6 +74,7 @@ fn introspection_is_machine_readable() {
         &["schema", "validation"],
         &["schema", "batch-request"],
         &["schema", "batch-response"],
+        &["schema", "batch-validation"],
     ] {
         let output = run(args, "");
         assert!(output.status.success(), "{:?}", output);
@@ -178,6 +179,106 @@ fn batch_preserves_ids_continues_and_emits_one_compact_line_per_input_line() {
     assert!(empty.stdout.is_empty());
     let final_line = run(&["batch", "--quiet"], REQUEST);
     assert_eq!(value(&final_line)["id"], Value::Null);
+}
+
+#[test]
+fn batch_validation_is_local_preserves_ids_and_continues_after_errors() {
+    let input = format!(
+        "{{\"id\":{{\"nested\":[1,true]}},\"state\":{{}},\"questions\":{{}}}}\r\nnot-json\n\n42\n{REQUEST}"
+    );
+    // Invalid credentials would fail if this command tried to initialize a client.
+    let output = run_with_key(
+        &["validate", "--batch", "--quiet", "--pretty"],
+        &input,
+        Some("invalid\nkey"),
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let values: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(values.len(), 5);
+    assert_eq!(values[0]["id"], json!({"nested":[1,true]}));
+    assert_eq!(values[0]["ok"], true);
+    assert_eq!(values[0]["valid"], false);
+    assert_eq!(values[0]["errors"][0]["code"], "empty_questions");
+    for value in &values[1..3] {
+        assert_eq!(value["id"], Value::Null);
+        assert_eq!(value["ok"], false);
+        assert_eq!(value["error"]["code"], "invalid_json");
+    }
+    assert_eq!(values[3]["valid"], false);
+    assert_eq!(values[3]["errors"][0]["path"], "$");
+    assert_eq!(values[4], json!({"id":null,"ok":true,"valid":true}));
+    let schema = value(&run(&["schema", "batch-validation"], ""));
+    for value in values {
+        assert!(jsonschema::is_valid(&schema, &value));
+        let mut missing_id = value.clone();
+        missing_id.as_object_mut().unwrap().remove("id");
+        assert!(!jsonschema::is_valid(&schema, &missing_id));
+    }
+}
+
+#[test]
+fn batch_validation_exit_status_and_file_input() {
+    let empty = run(&["validate", "--batch"], "");
+    assert!(empty.status.success());
+    assert!(empty.stdout.is_empty());
+    let invalid = run(&["validate", "--batch"], "{\"id\":null}\n");
+    assert!(invalid.status.success());
+    assert_eq!(value(&invalid)["valid"], false);
+    let dash = run(&["validate", "--batch", "--file", "-"], REQUEST);
+    assert!(dash.status.success());
+    assert_eq!(value(&dash)["valid"], true);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/issue.json");
+    // A compact JSONL fixture is needed: the ordinary example is pretty-printed JSON.
+    let file_path =
+        std::env::temp_dir().join(format!("jevc-validate-batch-{}.jsonl", std::process::id()));
+    let request: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    std::fs::write(&file_path, serde_json::to_vec(&request).unwrap()).unwrap();
+    let file = run(
+        &["validate", "--batch", "--file", file_path.to_str().unwrap()],
+        "",
+    );
+    std::fs::remove_file(file_path).unwrap();
+    assert!(file.status.success());
+    assert_eq!(value(&file)["valid"], true);
+    let missing = run(
+        &[
+            "validate",
+            "--batch",
+            "--pretty",
+            "--file",
+            "/nonexistent/jevc-input.jsonl",
+        ],
+        "",
+    );
+    assert_eq!(missing.status.code(), Some(1));
+    assert_eq!(value(&missing)["error"]["code"], "input_error");
+    assert_eq!(
+        String::from_utf8(missing.stdout).unwrap().lines().count(),
+        1
+    );
+}
+
+#[test]
+fn batch_validation_drains_oversized_records() {
+    let mut input = "x".repeat(jevc::commands::MAX_INPUT_BYTES + 1);
+    input.push('\n');
+    input.push_str(REQUEST);
+    let output = run(&["validate", "--batch"], &input);
+    assert_eq!(output.status.code(), Some(1));
+    let values: Vec<Value> = String::from_utf8(output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(values.len(), 2);
+    assert_eq!(values[0]["error"]["code"], "input_too_large");
+    assert_eq!(values[0]["id"], Value::Null);
+    assert_eq!(values[1]["valid"], true);
 }
 
 #[test]

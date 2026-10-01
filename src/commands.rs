@@ -3,7 +3,7 @@ use crate::{
     client::JevClient,
     error::AppError,
     model::JevRequest,
-    protocol::{PROTOCOL_VERSION, Response, VERSION, ValidationResponse},
+    protocol::{BatchValidationResult, PROTOCOL_VERSION, Response, VERSION, ValidationResponse},
     validate,
 };
 use schemars::schema_for;
@@ -27,8 +27,8 @@ pub fn describe() -> Value {
         "description":"LLM-first CLI for JEV",
         "commands": {
             "decide":{"stdin":"JevRequest", "stdout":"JevResponse", "network":true, "options":["--file PATH", "--timeout SECONDS"]},
-            "validate":{"stdin":"JevRequest", "stdout":"ValidationResponse", "network":false, "options":["--file PATH"], "invalid_request_exit_status":0},
-            "schema":{"stdin":null, "stdout":"JSON Schema", "network":false, "targets":["request","response","error","validation","batch-request","batch-response"]},
+            "validate":{"stdin":"JevRequest", "stdout":"ValidationResponse", "network":false, "options":["--file PATH", "--batch"], "invalid_request_exit_status":0, "batch":{"stdin":"JSONL BatchRequest", "stdout":"JSONL BatchValidation", "preserve_order":true,"id":"Any JSON value; omitted ids become null", "exit_status":"Maximum execution error exit status across records; valid:false and empty input exit 0"}},
+            "schema":{"stdin":null, "stdout":"JSON Schema", "network":false, "targets":["request","response","error","validation","batch-request","batch-response","batch-validation"]},
             "describe":{"stdin":null, "stdout":"JSON", "network":false},
             "version":{"stdin":null, "stdout":"JSON", "network":false},
             "batch":{"stdin":"JSONL BatchRequest", "stdout":"JSONL BatchResponse", "network":true, "options":["--file PATH", "--timeout SECONDS"], "concurrency":1, "preserve_order":true, "id":"Any JSON value; omitted ids become null", "exit_status":"Maximum exit status across records; empty input exits 0"}
@@ -51,6 +51,7 @@ pub fn schema(target: SchemaTarget) -> Result<Value, AppError> {
             schema_for!(Response)
         }
         SchemaTarget::Validation => schema_for!(ValidationResponse),
+        SchemaTarget::BatchValidation => schema_for!(BatchValidationResult),
     };
     let mut value = serde_json::to_value(schema).map_err(|_| internal_error())?;
     match target {
@@ -64,7 +65,7 @@ pub fn schema(target: SchemaTarget) -> Result<Value, AppError> {
         SchemaTarget::BatchRequest => {
             value["properties"]["id"] = json!({"description":"Opaque correlation ID, echoed unchanged; omitted IDs become null"});
         }
-        SchemaTarget::BatchResponse => {
+        SchemaTarget::BatchResponse | SchemaTarget::BatchValidation => {
             let variants = value
                 .get_mut("anyOf")
                 .and_then(Value::as_array_mut)
@@ -80,6 +81,32 @@ pub fn schema(target: SchemaTarget) -> Result<Value, AppError> {
         _ => {}
     }
     Ok(value)
+}
+
+fn validation_response(value: &Value) -> ValidationResponse {
+    let errors = validate::check(value);
+    ValidationResponse {
+        ok: true,
+        valid: errors.is_empty(),
+        errors,
+    }
+}
+
+fn take_id(value: &mut Value) -> Value {
+    value
+        .as_object_mut()
+        .and_then(|map| map.remove("id"))
+        .unwrap_or(Value::Null)
+}
+
+fn emit_record(
+    writer: &mut impl Write,
+    response: &impl Serialize,
+    id: Value,
+) -> Result<(), AppError> {
+    let mut output = serde_json::to_value(response).map_err(|_| internal_error())?;
+    output["id"] = id;
+    emit(writer, &output, false)
 }
 
 pub fn emit(writer: &mut impl Write, value: &impl Serialize, pretty: bool) -> Result<(), AppError> {
@@ -180,17 +207,35 @@ pub async fn run(cli: &Cli, writer: &mut impl Write) -> Result<u8, AppError> {
         Command::Describe => emit(writer, &describe(), cli.pretty)?,
         Command::Schema { target } => emit(writer, &schema(*target)?, cli.pretty)?,
         Command::Validate(options) => {
-            let value = read_value(options)?;
-            let errors = validate::check(&value);
-            emit(
-                writer,
-                &ValidationResponse {
-                    ok: true,
-                    valid: errors.is_empty(),
-                    errors,
-                },
-                cli.pretty,
-            )?;
+            if options.batch {
+                let mut reader = input(&options.input)?;
+                let mut exit_status = 0;
+                while let Some(line) = record(&mut *reader)? {
+                    let mut id = Value::Null;
+                    let response = match line {
+                        Ok(mut value) => {
+                            id = take_id(&mut value);
+                            BatchValidationResult::Validated {
+                                response: validation_response(&value),
+                            }
+                        }
+                        Err(error) => {
+                            exit_status = exit_status.max(error.exit_status);
+                            if !cli.quiet {
+                                eprintln!("{error}");
+                            }
+                            BatchValidationResult::Failure {
+                                ok: false,
+                                error: error.body,
+                            }
+                        }
+                    };
+                    emit_record(writer, &response, id)?;
+                }
+                return Ok(exit_status);
+            }
+            let value = read_value(&options.input)?;
+            emit(writer, &validation_response(&value), cli.pretty)?;
         }
         Command::Decide(options) => {
             let request = validate::request(read_value(&options.input)?)?;
@@ -205,9 +250,7 @@ pub async fn run(cli: &Cli, writer: &mut impl Write) -> Result<u8, AppError> {
                 let mut id = Value::Null;
                 let result = async {
                     let mut value = line?;
-                    if let Some(map) = value.as_object_mut() {
-                        id = map.remove("id").unwrap_or(Value::Null);
-                    }
+                    id = take_id(&mut value);
                     let request = validate::request(value)?;
                     // Resolve configuration lazily so empty streams and invalid input stay local.
                     if client.is_none() {
@@ -230,9 +273,7 @@ pub async fn run(cli: &Cli, writer: &mut impl Write) -> Result<u8, AppError> {
                         error.response()
                     }
                 };
-                let mut output = serde_json::to_value(response).map_err(|_| internal_error())?;
-                output["id"] = id;
-                emit(writer, &output, false)?;
+                emit_record(writer, &response, id)?;
             }
             return Ok(exit_status);
         }

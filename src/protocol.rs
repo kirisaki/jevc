@@ -90,8 +90,24 @@ pub enum Response {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct ValidationResponse {
+    #[schemars(extend("const" = true))]
     pub ok: bool,
     pub valid: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[schemars(default)]
     pub errors: Vec<ValidationIssue>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(untagged)]
+pub enum BatchValidationResult {
+    Validated {
+        #[serde(flatten)]
+        response: ValidationResponse,
+    },
+    Failure {
+        #[schemars(extend("const" = false))]
+        ok: bool,
+        error: ErrorBody,
+    },
 }
